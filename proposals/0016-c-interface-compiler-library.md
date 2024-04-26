@@ -66,6 +66,227 @@ These features will also need to be supported by the new c-style library.
 Code snippets on how to use the COM library are located
 in [DXC api code snippets](#dxc-code-snippets).
 
+### What does the new library design look like?
+The clang compiler based library is c-style only.  It will follow a create/
+destroy pattern for any objects that require lifetime management. Helpers
+will also be added to aid in common operations like allocation of required
+inputs and parsing of outputs returned from the api.
+
+#### Library creation
+Instances of the compiler library are created using
+CreateHlslCompilerLibrary(). Library instances must be destroyed
+using DestroyHlslCompilerLibrary().
+
+```c++
+// Object representing an instance of the HLSL shader compiler library.
+typedef void* HlslCompilerInstance;
+
+HlslCompilerInstance CreateHlslCompiler();
+
+void DestroyHlslCompiler(HlslCompilerInstance instance);
+```
+
+#### Main Compile() entrypoint
+The library instance is passed into a Compile function to compile a shader.
+Compilation of a shader returns a HlslCompilerResult.  An HlslCompilerResult
+is a container instance that holds one or more outputs.  Individual output
+values are accessed by calling GetHlslCompilerResultOutput() and returned as
+HlslCompilerBuffer values.
+
+HlslCompilerResult objects must be freed by calling FreeHlslCompilerResult(). 
+
+``` c++
+typedef void* HlslCompilerResult;
+
+HlslCompilerResult Compile(
+    HlslCompilerInstance instance,
+    const HlslCompilerBuffer& buffer,
+    const wchar_t** args, size_t numArgs,
+    HlslCompilerIncludeCallback callback /*(optional)*/);
+
+void FreeHlslCompilerResult(HlslCompilerResult result);
+
+```
+
+#### Working with HlslCompilerBuffer and HlslCompilerResult data
+A HlslCompilerBuffer is the most basic form of data used in the compiler
+library.  It is used as an input to main Compile() function to supply a buffer
+of hlsl source text to compile.
+
+HlslCompilerBuffer is also used for each returned output value accessed in the 
+hlslCompilerResult object.
+
+A hlslCompilerBuffer is allocated using helper entrypoints
+AllocateHlslCompilerBuffer and others. FreeHlslCompilerBuffer() must be called
+for all bufferes allocated using AllocateHlslCompilerBuffer helpers.  
+
+HlslCompilerBuffers returned as outputs from HlslCompilerResult must not be 
+freed using FreeHlslCompilerBuffer().  These buffers are managed by completely
+by the result object and the memory will be freed when hlslCompilerResult is
+freed.
+
+### Buffers
+```c++
+enum class HlslCompilerBufferType
+{
+    None,
+    Bytes,
+    UTF8Text, // UTF-8 encoded text, null termianted
+};
+
+struct HlslCompilerBuffer
+{
+    LibraryBufferType Type = HlslCompilerBufferType::None;
+    const void* Data = nullptr;
+    size_t Size = 0;
+};
+
+HlslCompilerBuffer AllocateHlslCompilerBuffer(
+  HlslCompilerBufferType type,
+  size_t size);
+
+HlslCompilerBuffer AllocateHlslCompilerBufferFromFile(
+  const wchar_t* path);
+
+void FreeHlslCompilerBuffer(HlslCompilerBuffer buffer);
+
+```
+
+### Result Outputs
+The following output types can be accessed from a hlslCompilerResult. The types
+of outputs depend completely on the arguments passed to the Compile() function.
+
+```c++
+enum class HlslCompilerOutputType
+{
+    None = 0,
+    Object = 1,        // Shader or library object
+    Errors = 2,        // Error information in text
+    PDB = 3,           // Symbol data
+    ShaderHash = 4,    // DxcShaderHash of shader or shader with source info (-Zsb/-Zss)
+    Disassembly = 4,   // text output from (Disassemble)
+    hlsl = 6,          // text output from (Preprocessor or Rewriter)
+    Text = 7,          // other text, such as -ast-dump or -Odump
+    Reflection = 8,    // RDAT part with reflection data
+    RootSignature = 9  // Serialized root signature output
+};
+
+HlslCompilerBuffer GetHlslCompilerResultOutput(
+    HlslCompilerResult result,
+    HlslCompilerOutputType type);
+
+// Returns true if the output is in the specified result
+// false otherwise.
+bool HasHlslCompilerResultOutput(
+    HlslCompilerResult result,
+    HlslCompilerOutputType type);
+
+```
+
+### Include handlers
+Include handler support works very similar to the DXC compiler library except
+the handler is now a callback function instead of an interface.  The callback
+function is passed in a an optional parameter to Compile().  If nullptr is
+used, a default handler will be used.
+
+```c++
+typedef bool (*HlslCompilerIncludeCallback) (const wchar_t* path, HlslCompilerBuffer buffer);
+
+```
+
+### Thoughts on out of process design
+
+Requirements:
+   Each compilation performed by the library should occur in its own
+   process. This is done because global state in the compiler could
+   leak between compiles in the same process causing undesired
+   results.
+
+   Questions:
+   * Libraries exposed from llvm/clang today are static libraries.
+     The existing DXC library is a dynamic library. Should this
+     new library be dynamic as well? Provide both?
+
+Options:
+
+1. Build a new executable is an out of process worker that is compiled
+   with all required clang libraries/internals to perform compilation.
+   This host will open a named pipe specified on the command-line
+   and write results there.
+
+2. Update the clang executable parse additional command-line arguments
+   for opening a named pipe and write results there. Command-line
+   arguments could be part of the DXC mode settings, keeping these
+   changes a bit more contained to HLSL compilation behaviors.
+
+### clang hlsl Library Api code snippets
+The following snippe shows how a shader is compiled using the library.
+NOTE: RAII wrappers could be created and used to auto-free returned objects,
+but they are not used here to show raw usage of the api.
+
+```c++
+// Compiling a shader
+HlslCompilerInstance compilerLibrary = CreateHlslCompiler();
+if (compilerLibrary) {
+
+  // Load some shader source code from file to compile
+  HlslCompilerBuffer shaderSource = AllocateHlslCompilerBufferFromFile(L"shader.hlsl");
+  if (shaderSource.Data) {
+
+    std::vector<const wchar_t*> arguments;
+      arguments.push_back(L"-E");
+      arguments.push_back(L"VSMain");
+      arguments.push_back(L"-T");
+      arguments.push_back(L"vs_6_6");
+      arguments.push_back(L"-WX");
+      arguments.push_back(L"-Zi");
+
+    compileResult = Compile(
+      compilerLibrary
+      shaderSource,
+      arguments.data(),
+      arguments.size(),
+      nullptr); // no custom include handler used
+
+    if (compileResult) {
+      if (!HasHlslCompilerResultOutput(compileResult, HlslCompilerOutputType::Errors)) {
+        
+        // Compilation succeeded!
+        auto compiledObject = GetHlslCompilerResultOutput(
+          compileResult,
+          HlslCompilerOutputType::Object);
+
+      } else {
+
+        auto errorText = GetHlslCompilerResultOutput(
+          compileResult,
+          HlslCompilerOutputType::Errors);
+
+        // ERROR: Compilation failed!  Details are reported in the errorText
+
+      }
+
+      FreeHlslCompilerResult(compileResult);  
+    }
+
+    FreeHlslCompilerBuffer(shaderSource);
+  } else {
+
+    // ERROR: Shader source could not be loaded from a file
+
+  }
+  
+  // cleanup the library instance
+  DestroyHlslCompiler(compilerLibrary);
+
+} else {
+
+  // ERROR: Compiler library could not be created most likely due to out of
+  //        memory condition or missing library dependancies.
+
+}
+```
+
 ### DXC Library Api descriptions and code snippets
 
 The following interfaces are used to work with data being passed to/from the
