@@ -191,7 +191,7 @@ function is passed in as an optional parameter to Compile().  If nullptr is
 specified a default handler will be used.
 
 ```c++
-typedef bool (*HlslCompilerIncludeCallback) (const wchar_t* path, HlslCompilerBuffer buffer);
+typedef HlslCompilerBuffer (*HlslCompilerIncludeCallback) (const wchar_t* path);
 
 ```
 
