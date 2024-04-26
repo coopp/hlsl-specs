@@ -74,8 +74,8 @@ inputs and parsing of outputs returned from the api.
 
 #### Library creation
 Instances of the compiler library are created using
-CreateHlslCompilerLibrary(). Library instances must be destroyed
-using DestroyHlslCompilerLibrary().
+CreateHlslCompiler(). Library instances must be destroyed
+using DestroyHlslCompiler().
 
 ```c++
 // Object representing an instance of the HLSL shader compiler library.
@@ -88,8 +88,8 @@ void DestroyHlslCompiler(HlslCompilerInstance instance);
 
 #### Main Compile() entrypoint
 The library instance is passed into a Compile function to compile a shader.
-Compilation of a shader returns a HlslCompilerResult.  An HlslCompilerResult
-is a container instance that holds one or more outputs.  Individual output
+Compilation of a shader returns a HlslCompilerResult.  A HlslCompilerResult
+is a container object that holds one or more outputs.  Individual output
 values are accessed by calling GetHlslCompilerResultOutput() and returned as
 HlslCompilerBuffer values.
 
@@ -116,9 +116,10 @@ of hlsl source text to compile.
 HlslCompilerBuffer is also used for each returned output value accessed in the 
 hlslCompilerResult object.
 
-A hlslCompilerBuffer is allocated using helper entrypoints
-AllocateHlslCompilerBuffer and others. FreeHlslCompilerBuffer() must be called
-for all bufferes allocated using AllocateHlslCompilerBuffer helpers.  
+A hlslCompilerBuffer can be allocated in code using
+AllocateHlslCompilerBuffer and other helper versions of that function.
+FreeHlslCompilerBuffer() must be called for all bufferes allocated using
+allocation helpers.  
 
 HlslCompilerBuffers returned as outputs from HlslCompilerResult must not be 
 freed using FreeHlslCompilerBuffer().  These buffers are managed by completely
@@ -136,7 +137,7 @@ enum class HlslCompilerBufferType
 
 struct HlslCompilerBuffer
 {
-    LibraryBufferType Type = HlslCompilerBufferType::None;
+    HlslCompilerBufferType Type = HlslCompilerBufferType::None;
     const void* Data = nullptr;
     size_t Size = 0;
 };
@@ -186,15 +187,15 @@ bool HasHlslCompilerResultOutput(
 ### Include handlers
 Include handler support works very similar to the DXC compiler library except
 the handler is now a callback function instead of an interface.  The callback
-function is passed in a an optional parameter to Compile().  If nullptr is
-used, a default handler will be used.
+function is passed in as an optional parameter to Compile().  If nullptr is
+specified a default handler will be used.
 
 ```c++
 typedef bool (*HlslCompilerIncludeCallback) (const wchar_t* path, HlslCompilerBuffer buffer);
 
 ```
 
-### Thoughts on out of process design
+### WORKING: --- Thoughts for the out of process design
 
 Requirements:
    Each compilation performed by the library should occur in its own
