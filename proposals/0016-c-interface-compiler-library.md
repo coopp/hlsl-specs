@@ -50,6 +50,8 @@ older DXC-based solutions to adopt clang as the preferred HLSL compiler.
 
 ## Detailed design
 
+[Architecture](#architecture)
+
 ### What is provided today in the DXC api?
 The current DirectX shader compiler library is a nano-COM implementation that
 supports the following features.
@@ -996,21 +998,8 @@ if (compileResult->HasOutput(DXC_OUT_OBJECT)) {
 
 ```
 
-## Alternatives considered for supporting legacy toolchains
+## Architecture
 
-### Alternative 1: Open Source wrapper code for IDxcCompiler interface
-
-This approach involves creating wrapper code released on
-https://github.com/microsoft that can be included into existing toolchain
-projects. This wrapper implementation will be a drop-in match to all of the
-existing public interfaces allowing easy adoption to using clang.
-
-The wrapper implementation will call into the new C export for compilation.
-
-### Alternative 2: Build/Ship Nuget package library
-
-This approach combines Alternative 1 and adds compiling the wrapper code into
-formal header/libraries that can be consumed by legacy toolchains.
 
 ## Resources
 
