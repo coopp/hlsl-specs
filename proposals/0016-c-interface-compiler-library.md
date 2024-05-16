@@ -999,7 +999,50 @@ if (compileResult->HasOutput(DXC_OUT_OBJECT)) {
 ```
 
 ## Architecture
+This section describes the architecture choices for building the shader
+compiler library. It will cover what libraries are to be built and added to
+and some calling pattern choices for the c-style api.
 
+There will also be an additional section that touches on an out of process
+design proposal (compiler services) which moves compilation to a sandbox
+process.  That design could be used for compilations of other languages.
+
+### Why have a library at all?  Why not just run clang.exe yourself?
+Before diving into the library details we should discuss why we even need a
+library at all.  Why can't clients just execute the clang.exe with options
+and compile their shaders that way.  That is a valid scenario and will be
+used for sure.
+
+It is well known that launching processes on Windows is expensive and has
+performance impacts on toolchains that compile a lot of shaders. A library
+enables clients to perform multiple compilations from a single process.
+This is how the DXC COM based compiler library is used today.
+
+#### Include Handlers (required)
+A design requirement that cannot be satisfied with just executing a 
+command is include handlers. An include handler is a way for clients to hook
+into the compilation process and dynamically load dependencies when needed.
+The COM based DXC library supports this feature and we have already been
+asked by a Game Studio to ensure this new design supports it.
+See [Include Handlers](#include-handlers) for more details. 
+
+
+```mermaid
+flowchart TD
+  A[TBD]
+```
+
+### Out of process architecture (Compiler Services)
+```mermaid
+flowchart TD
+  A[Compile Shader] -->|Connect to Services|B
+    B{Services Running?}
+    B -->|Yes| C[Connected]
+    B -->|No| D[Start services]
+    D -->C-->|Queue Compile|E[Wait]-->F{Compile complete?}
+    F -->|Yes|G[Return result]
+    F -->|No| E
+```
 
 ## Resources
 
