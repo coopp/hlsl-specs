@@ -1026,13 +1026,78 @@ The COM based DXC library supports this feature and we have already been
 asked by a Game Studio to ensure this new design supports it.
 See [Include Handlers](#include-handlers) for more details. 
 
+### Where should this library be built?
+#### Option 1: libClang
+We could add this library's apis to the existing libClang library.
+Clang already provides a c interface to clang via the libClang library. This
+library currently is descibed as providing facilities for parsing source code
+into an abstract syntax tree (AST), loading already-parsed ASTs,
+traversing the AST, associating physical source locations with elements within
+the AST, and other facilities that support Clang-based development tools.
 
-```mermaid
-flowchart TD
-  A[TBD]
-```
+Pros:
+* This is already a well known library that focuses on providing a C interface
+  for clang.  Adding compilation here could "just fit".
+* There is an established design pattern that we can follow.
 
-### Out of process architecture (Compiler Services)
+Cons:
+* This library seems really focused on interacting with and manupulating the
+  AST and walking deeper details of compilation behaviors. It doesn't go
+  anywhere near providing highlevel outputs like executables or linkable
+  objects.
+* Would adding compilation here add confusion to this libary?
+
+#### Option 2: libHlsl
+We could build a new library to hold the code that provides apis that work with
+hlsl specific things.  Compilation, reflection data, etc.  This would also
+follow the design approach that libClang provides to match other c style apis.
+
+Pros:
+* Allow the design to expand a bit beyond possible libClang designs if needed.
+
+Cons:
+* Moving away from what we are trying to do with unifying compilers under a
+  single clang family.
+* Might not recieve much attention from contributors if tucked away from
+  mainline clang c apis.
+
+### Is Out-of-process support required?
+Most lbraries consumed by clang tooling are linked and called in-process unless
+the developer creates their own out-of-process system forming a new system.
+
+One exception is the ORC JIT library. It is designed to provide a modular API
+for building JIT compilers. [ORC documentation](https://llvm.org/docs/ORCv2.html).
+
+ORC is composed of the following libraries along with other llvm libraries:
+* LLVMOrcJIT
+* LLVMOrcDebugging
+* LLVMOrcShared
+* LLVMOrcTargetProcess
+
+The JIT system is an out-of-process system that could be leveraged as an
+example of how to build a out-of-process compiler api.
+This library of code could be a good resource if we proceed to create an 
+out-of-process system.
+
+#### Should we build an out-of-process architecure?
+
+Pros:
+* Launching processes on Windows is expensive, so launching a process once and
+  reusing it for compilation would provide performance benefits.
+* A sandbox process is also welcome from a security point of view.  Compiling
+  a shader in a sandbox vs the calling process provides a bit of isolation.
+
+Cons:
+* It is harder to build/maintain.  There are many challenges that come with
+  client/server process architectures.
+
+
+### What could an out of process architecture look like? (Compiler Services)
+An out-of-process system could look like the following.  An initial connection
+by a client would start the required server process.  All following compilations
+would be queued and processed by that process.  If the caller loses its
+connection or cleans up the api, the server process is terminated.
+
 ```mermaid
 flowchart TD
   A[Compile Shader] -->|Connect to Services|B
