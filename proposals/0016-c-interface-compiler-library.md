@@ -1000,73 +1000,87 @@ if (compileResult->HasOutput(DXC_OUT_OBJECT)) {
 
 ## Architecture
 This section describes the architecture choices for building the shader
-compiler library. It will cover what libraries are to be built and added to
-and some calling pattern choices for the c-style api.
+compiler library. It will cover what library module is to be built and
+some calling pattern choices for the c-style api.
 
-There will also be an additional section that touches on an out of process
-design proposal (compiler services) which moves compilation to a sandbox
-process.  That design could be used for compilations of other languages.
+There is also an additional section that touches on an out of process
+design proposal which moves compilation to a sandbox process.
 
 ### Why have a library at all?  Why not just run clang.exe yourself?
 Before diving into the library details we should discuss why we even need a
-library at all.  Why can't clients just execute the clang.exe with options
-and compile their shaders that way.  That is a valid scenario and will be
-used for sure.
+library at all.  Why can't clients just execute clang with some options
+and compile their shaders? They can and will. Running clang.exe is a mainline
+supported scenario but we need more to support additional features like
+Include Handlers which are supported by the DXC COM-base DXC library today.
 
-It is well known that launching processes on Windows is expensive and has
-performance impacts on toolchains that compile a lot of shaders. A library
-enables clients to perform multiple compilations from a single process.
-This is how the DXC COM based compiler library is used today.
-
-#### Include Handlers (required)
-A design requirement that cannot be satisfied with just executing a 
-command is include handlers. An include handler is a way for clients to hook
-into the compilation process and dynamically load dependencies when needed.
-The COM based DXC library supports this feature and we have already been
-asked by a Game Studio to ensure this new design supports it.
-See [Include Handlers](#include-handlers) for more details. 
+[Include Handlers](#include-handlers) are a way for clients to hook into the
+compilation process and load include dependencies on demand as needed.
 
 ### Where should this library be built?
+I see two possible options where the hlsl compiler library could live. Both
+options have pros and cons listed.
+
 #### Option 1: libClang
-We could add this library's apis to the existing libClang library.
+We could add the new compiler library apis to the existing libClang library.
 Clang already provides a c interface to clang via the libClang library. This
-library currently is descibed as providing facilities for parsing source code
+library currently is described as providing facilities for parsing source code
 into an abstract syntax tree (AST), loading already-parsed ASTs,
 traversing the AST, associating physical source locations with elements within
 the AST, and other facilities that support Clang-based development tools.
 
 Pros:
 * This is already a well known library that focuses on providing a C interface
-  for clang.  Adding compilation here could "just fit".
-* There is an established design pattern that we can follow.
+  for clang.  Adding new apis for compilation here could "just fit".
+* There are established design patterns in this library that we can follow.
 
 Cons:
-* This library seems really focused on interacting with and manupulating the
-  AST and walking deeper details of compilation behaviors. It doesn't go
-  anywhere near providing highlevel outputs like executables or linkable
-  objects.
-* Would adding compilation here add confusion to this libary?
+* This library is currently focused on working with and manipulating the
+  AST and gathering deeper details of compilation behaviors.
+* Adding compilation support here could add confusion to this library
+* Consumers of libClang today would get hlsl specific things they might not
+  want.
 
 #### Option 2: libHlsl
-We could build a new library to hold the code that provides apis that work with
-hlsl specific things.  Compilation, reflection data, etc.  This would also
-follow the design approach that libClang provides to match other c style apis.
+We could build a new library to hold the code that supports compilation and
+other services like reflection, etc. This library would also follow the 
+established design patterns present in libClang as a consistent c api approach
+is welcomed.
 
 Pros:
-* Allow the design to expand a bit beyond possible libClang designs if needed.
+* HLSL specific code will be in one place and able to be selectively chosen/
+  excluded if necessary. It will be really clear that linking to this library
+  gives you hlsl-specific support.
+* Expand beyond the base design patterns a bit if needed.
 
 Cons:
-* Moving away from what we are trying to do with unifying compilers under a
-  single clang family.
-* Might not recieve much attention from contributors if tucked away from
+* Moves away from what we are trying to do with unifying compilers under a
+  single clang family of apis.
+* Could get ignored by other contributors because of it being tucked away from
   mainline clang c apis.
 
 ### Is Out-of-process support required?
-Most lbraries consumed by clang tooling are linked and called in-process unless
-the developer creates their own out-of-process system forming a new system.
 
-One exception is the ORC JIT library. It is designed to provide a modular API
+It is well known that process launching processes on Windows is expensive and
+has performance impacts on toolchains that compile a lot of shaders. A library
+that enables clients to perform multiple compilations from a single reusable
+process could be quite useful and save on launch/teardown costs.
+
+Linux operating systems do not have this process creation overhead and can
+do creative things like use fork() which enables execution of code in a 
+separate process already associated with the calling process.
+
+Most libraries built/consumed by developers from clang are linked and used
+in-process. A developer could create their own out-of-process system and host
+a library if needed.
+
+One exception is the ORC JIT library. ORC is designed to provide a modular API
 for building JIT compilers. [ORC documentation](https://llvm.org/docs/ORCv2.html).
+
+The JIT system is an out-of-process system and is an example of how to build an
+out-of-process api.
+
+The ORC library of code could be a good resource or even a starting point if we
+proceed to create an out-of-process system.
 
 ORC is composed of the following libraries along with other llvm libraries:
 * LLVMOrcJIT
@@ -1074,38 +1088,31 @@ ORC is composed of the following libraries along with other llvm libraries:
 * LLVMOrcShared
 * LLVMOrcTargetProcess
 
-The JIT system is an out-of-process system that could be leveraged as an
-example of how to build a out-of-process compiler api.
-This library of code could be a good resource if we proceed to create an 
-out-of-process system.
-
-#### Should we build an out-of-process architecure?
-
 Pros:
 * Launching processes on Windows is expensive, so launching a process once and
   reusing it for compilation would provide performance benefits.
-* A sandbox process is also welcome from a security point of view.  Compiling
+* A sandbox process is good from a security point of view.  Compiling
   a shader in a sandbox vs the calling process provides a bit of isolation.
 
 Cons:
-* It is harder to build/maintain.  There are many challenges that come with
-  client/server process architectures.
+* It is a more complex system which may be harder to maintain and must be cross
+  platform.
 
-
-### What could an out of process architecture look like? (Compiler Services)
+### What could an out of process architecture look like?
 An out-of-process system could look like the following.  An initial connection
-by a client would start the required server process.  All following compilations
-would be queued and processed by that process.  If the caller loses its
-connection or cleans up the api, the server process is terminated.
+by a client would start the required worker process. All compilations will be
+queued and processed within that process. If the caller loses its connection
+or cleans up the api, the server process is terminated cancelling all pending
+compilation jobs.
 
 ```mermaid
 flowchart TD
-  A[Compile Shader] -->|Connect to Services|B
-    B{Services Running?}
+  A[Compile Shader] -->|Connect to Worker Process|B
+    B{Worker Process Running?}
     B -->|Yes| C[Connected]
-    B -->|No| D[Start services]
+    B -->|No| D[Launch Worker Process]
     D -->C-->|Queue Compile|E[Wait]-->F{Compile complete?}
-    F -->|Yes|G[Return result]
+    F -->|Yes|G[Return result/status from Worker Process]
     F -->|No| E
 ```
 
