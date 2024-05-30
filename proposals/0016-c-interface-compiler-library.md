@@ -1058,6 +1058,341 @@ Cons:
 * Could get ignored by other contributors because of it being tucked away from
   mainline clang c apis.
 
+### What does the new library design look like?
+The clang compiler based library is c-style only.  It will follow a create/
+destroy pattern for any objects that require lifetime management. Helpers
+will also be added to aid in common operations like allocation of required
+inputs and parsing of outputs returned from the api.
+
+#### Library creation
+Instances of the compiler library are created using
+clang_createHlslCompiler(). Library instances must be destroyed
+using clang_disposeHlslCompiler().
+
+```c++
+/**
+* An opaque type representing the compiler library.
+*/
+typedef void* HlslCompilerInstance;
+
+/**
+* Creates an instance of a compiler. Compiler instances must be destroyed by
+* calling clang_disposeHlslCompiler.
+*/
+HlslCompilerInstance clang_createHlslCompiler();
+
+/**
+* Destroy the give compiler instance.
+*
+* Any compilations in progress associated with specified instance will be
+* cancelled.
+*/
+void clang_disposeHlslCompiler(HlslCompilerInstance instance);
+```
+
+#### Main Compile() entrypoint
+The library instance is passed into a Compile function to compile a shader.
+Compilation of a shader returns a HlslCompilerResult.  A HlslCompilerResult
+is a container object that holds error information and a way to gain access
+to compiler outputs.
+
+HlslCompilerResult objects must be freed by calling
+clang_disposeHlslCompilerResult(). 
+
+``` c++
+
+/**
+ * Error codes returned by library routines.
+ *
+ * Zero (\c HlslError_Success) is the only error code indicating success.
+ * Other error codes, including not yet assigned non-zero values, indicate
+ * errors.
+ */
+enum HlslErrorCode {
+  /**
+   * No error.
+   */
+  HlslError_Success = 0,
+
+  /**
+   * A generic error code, no further details are available.
+   *
+   * Errors of this kind can get their own specific error codes in future
+   * library versions.
+   */
+  HlslError_Failure = 1,
+
+  /**
+   * library crashed while performing the requested operation.
+   */
+  HlslError_Crashed = 2,
+
+  /**
+   * The function detected that the arguments violate the function
+   * contract.
+   */
+  HlslError_InvalidArguments = 3,
+
+  /**
+   * Other...
+   */
+  HlslError_XXXXX = XXXX
+};
+
+/**
+* An opaque type representing output information returned for a given
+* compilation.
+*
+* Compiler outputs can be accessed and read using
+* clang_getCompilerOutputContents.
+*/
+typedef void* HlslCompilerOutput;
+
+/**
+* A single result from compilation that includes error code, status text and
+* the resulting compiler output.
+*/
+typedef struct HlslCompilerResult
+{
+  /**
+  * An error code indicating success or otherwise.
+  */
+  HlslErrorCode error_code;
+
+  /**
+  * Null terminated status text which includes additional information like
+  * warnings or other output normally sent to stdout/stderr.
+  */
+  const char* status_text;
+
+  /**
+  * An opaque type representing output information returned for a given
+  * compilation.
+  */
+  HlslCompilerOutput compiler_output;
+
+  /**
+  * Size of the compiler output in bytes.
+  */
+  size_t compiler_output_size;
+}
+
+/**
+* Compile a shader with the given shader source and arguments.
+* 
+* /param instance the compiler instance
+* 
+* /param buffer a pointer to a buffer in memory that holds the contents of a
+* source file to compile, or a NULL pointer when the file is specified as a
+* path in the arguments array.
+*
+* /param bufferSize the size of the buffer.
+*
+* /param args an array of arguments to use for compilation
+*
+* /param numArgs the number of arguments in /p args.
+* 
+* /param includeHandler a callback function for supplying additional
+* includes ondemand during compilation. This parameter is optional.
+*/
+
+HlslCompilerResult clang_compileHlsl(
+    HlslCompilerInstance instance,
+    const char* buffer,
+    size_t bufferSize,
+    const char** args, size_t numArgs,
+    HlslCompilerIncludeCallback includeHandler /*(optional)*/);
+
+/**
+* Destroy the given compiler result.
+*/
+void clang_disposeHlslCompilerResult(HlslCompilerResult result);
+
+```
+
+#### Working with HlslCompilerResult data
+
+```c++
+
+/**
+* Retrieve the size of the compiler output in bytes.
+*
+* \param instance the compiler instance
+*
+* \param output the output for which to retrieve the buffer
+*
+* \returns the size of the compiler output in bytes.
+*/
+const size_t clang_getCompilerOutputContentsSize(
+  HlslCompilerInstance instance,
+  HlslCompilerOutput output);
+
+/**
+* Retrieve the buffer associated with the give compiler output.
+*
+* \param instance the compiler instance
+*
+* \param output the output for which to retrieve the buffer
+*
+* \param buffer the buffer to recieve compiler output data
+*
+* \param size [out] if non-NULL, will be set to the size of the buffer
+*
+* \returns an error code indicating if the output was sucessfully read into 
+* the supplied buffer.
+*/
+const HlslErrorCode clang_getCompilerOutputContents(
+  HlslCompilerInstance instance,
+  HlslCompilerOutput output,
+  char* buffer,
+  size_t bufferSize);
+  
+```
+
+### Include handlers
+Include handler support works very similar to the DXC compiler library except
+the handler is now a callback function instead of an interface.  The callback
+function is passed in as an optional parameter to Compile().  If nullptr is
+specified a default handler will be used.
+
+```c++
+
+/**
+* Callback to retrieve a buffer for the specified include path.
+*
+* This callback is implemented and passed to Compile() for supplying custom
+* buffers for the specified include path during compilation.
+*
+* \param path include path
+*
+* \param buffer the buffer with contents for the specified include path. This
+* buffer is owned by the caller.
+*
+* \param bufferSize [out] The size of the buffer in bytes
+*
+* \returns a bool indicating if the contents of the buffer have been filled
+* successfully.
+*/
+typedef bool (*HlslCompilerIncludeCallback) (
+  const wchar_t* path,
+  char** buffer,
+  size_t* bufferSize);
+
+```
+
+### clang hlsl Library Api code snippets
+The following snippet shows how a shader is compiled using the library.
+NOTE: RAII wrappers could be created and used to auto-free returned objects,
+but they are not used here to show raw usage of the api.
+
+```c++
+// AllocateBufferFromFile and FreeBuffer are utility
+// functions implemented by in the caller's code.
+//
+// QUESTION: Should these just be part of the libray?
+//
+struct Buffer
+{
+  char* Buffer = nullptr;
+  size_t BufferSize = 0;
+}
+// Copies the contents of a file into an allcoated buffer
+Buffer AllocateBufferFromFile(const char* path);
+Buffer AllocateBuffer(size_t size);
+void FreeBuffer(Buffer* buffer);
+
+// Compiling a shader
+HlslCompilerInstance compilerLibrary = clang_createHlslCompiler();
+if (compilerLibrary) {
+
+  // Load some shader source code from file to compile
+  auto shaderSource = AllocateBufferFromFile("shader.hlsl");
+  if (shaderSource.Buffer) {
+
+    std::vector<const wchar_t*> arguments;
+      arguments.push_back(L"-E");
+      arguments.push_back(L"VSMain");
+      arguments.push_back(L"-T");
+      arguments.push_back(L"vs_6_6");
+      arguments.push_back(L"-WX");
+      arguments.push_back(L"-Zi");
+
+    auto compileResult = clang_compileHlsl(
+      compilerLibrary
+      shaderSource.Buffer,
+      shaderSource.BufferSize,
+      arguments.data(),
+      arguments.size(),
+      nullptr); // no custom include handler used
+
+    if (compileResult.error_code == HlslError_Success) {
+
+      // Compilation succeeded!
+
+      if (compileResult.status_text) {
+
+        // Compiler warnings may be present.
+        //
+        // Output compileResult.status_text
+
+      }
+
+      size_t outputSize = clang_getCompilerOutputContentsSize(
+        compilerLibrary,
+        compileResult.compiler_output);
+
+      auto outputBuffer = AllocateBuffer(outputSize);
+      if (outputBuffer.Buffer) {
+        auto resultCode = clang_getCompilerOutputContents(
+          compilerLibrary,
+          compileResult.compiler_output,
+          outputBuffer.Buffer,
+          outputBuffer.BufferSize);
+        if (resultCode == HlslError_Success) {
+
+          // SUCCESS: Write or access outputBuffer here
+
+        } else {
+
+          // ERROR: Reading compiler output failed
+          //        Output resultCode
+
+        }
+
+        FreeBuffer(&outputBuffer);
+      } else {
+
+        // ERROR: Allocation of buffer for compiler output failed.
+
+      }
+
+    } else {
+
+      // ERROR: Compilation failed!
+      //        Output compileResult.status_text
+      //        Output compileResult.error_code
+
+    }
+
+    clang_disposeHlslCompilerResult(compileResult);
+    FreeBuffer(&shaderSource);
+  } else {
+
+    // ERROR: Buffer for source file could not be allocated.
+
+  }
+  
+  // cleanup the library instance
+  clang_disposeHlslCompiler(compilerLibrary);
+
+} else {
+
+  // ERROR: Compiler library could not be created most likely due to out of
+  //        memory condition or missing library dependancies.
+
+}
+```
+
 ### Is Out-of-process support required?
 
 It is well known that process launching processes on Windows is expensive and
@@ -1065,7 +1400,7 @@ has performance impacts on toolchains that compile a lot of shaders. A library
 that enables clients to perform multiple compilations from a single reusable
 process could be quite useful and save on launch/teardown costs.
 
-Linux operating systems do not have this process creation overhead and can
+Linux operating systems do not have this pr ocess creation overhead and can
 do creative things like use fork() which enables execution of code in a 
 separate process already associated with the calling process.
 
