@@ -1215,19 +1215,6 @@ void clang_disposeHlslCompilerResult(HlslCompilerResult result);
 ```c++
 
 /**
-* Retrieve the size of the compiler output in bytes.
-*
-* \param instance the compiler instance
-*
-* \param output the output for which to retrieve the buffer
-*
-* \returns the size of the compiler output in bytes.
-*/
-const size_t clang_getCompilerOutputContentsSize(
-  HlslCompilerInstance instance,
-  HlslCompilerOutput output);
-
-/**
 * Retrieve the buffer associated with the give compiler output.
 *
 * \param instance the compiler instance
@@ -1337,11 +1324,7 @@ if (compilerLibrary) {
 
       }
 
-      size_t outputSize = clang_getCompilerOutputContentsSize(
-        compilerLibrary,
-        compileResult.compiler_output);
-
-      auto outputBuffer = AllocateBuffer(outputSize);
+      auto outputBuffer = AllocateBuffer(compileResult.compiler_output_size);
       if (outputBuffer.Buffer) {
         auto resultCode = clang_getCompilerOutputContents(
           compilerLibrary,
